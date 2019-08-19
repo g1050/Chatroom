@@ -194,11 +194,11 @@ int Get_grpmem_persist(char *buf)
     while(row = mysql_fetch_row(res)){
 
         //将群消息转化成一对多的群通知 
-        if(atoi(row[0]) != msgfs.sender)//群消息不要发给自己
+        if(atoi(row[0]) != msg.sender)//群消息不要发给自己
         {
             msgfs.receiver = atoi(row[0]);
             memcpy(buf2,&msgfs,sizeof(msg));
-            Receive_message2(fd,buf2);   
+            Receive_message2(fd,buf2); //发送的消息 sender 群号 receiver 接受者 msg 群消息
         }
         
 
@@ -217,8 +217,33 @@ int Get_grpmem_persist(char *buf)
 
  }
 
+ int If_member(char *buf)
+ {
+      int fd;
+    chat_message msg;
+    chat_message msgfs;
+    char buf2[MAXSIZE];
+    memcpy(&msg,buf,sizeof(msg));
+    
+    char insert2[MAXSIZE];
+    sprintf(insert2,"select  *from  pertogrp where (username = %d and id =  %d)",msg.sender,msg.receiver );
+    if(mysql_real_query(con,insert2,strlen(insert2))){
+        finish_with_error(con);
+    }
+    MYSQL_RES *res  = mysql_store_result(con);
+    MYSQL_ROW  row = mysql_fetch_row(res);
+    
+    //msg.sender,msg.receiver,msg.mg);//发送者 群号 和聊天记录
+
+
+
+    //没有找到数据，说明不是群成员
+    if(row == NULL ) return 0;
+    else return 1;
+ }
+
 void Broadcast_grpmsg(int fd,char *buf)
-{
+{//sdender 发送者 receiver 群号 msg 消息
     
     chat_message msg;
     memcpy(&msg,buf,sizeof(msg));
@@ -226,6 +251,11 @@ void Broadcast_grpmsg(int fd,char *buf)
     // printf("msg.receiver = %d\n",msg.receiver);
     // printf("msg.mg = %s\n",msg.mg);
 
+    //首先判断是不是群成员
+    if(!If_member(buf)){
+        Send_message(fd,0,"您还不是群成员");
+        return ;
+    }
     //将群聊天记录存入数据库中
     Store_grpmsg_ppersist(msg.sender,msg.receiver,msg.mg);//发送者 群号 和聊天记录
 

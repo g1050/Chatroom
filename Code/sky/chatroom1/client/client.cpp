@@ -53,7 +53,7 @@ int flag_login  = 0;
 int flag_question = 0;
 int listenfd;
 int loginuser;
-int talkuser;
+int talkuser = -1;
 int talkgrp = 0;
 int length;
 //密保问题结构体
@@ -191,8 +191,9 @@ void Print_cmessage(char *buf)
     chat_message msg;
     memcpy(&msg,buf,sizeof(msg));
     if(talkuser == msg.sender || talkuser == 0)
-        printf("[%d]:%s\n",msg.sender,msg.mg);
+        printf("                                                              [%d]:%s\n",msg.sender,msg.mg);
     else{
+        printf("                                                              收到一条好友消息\n");
         Offline_message_persist(buf);
     } 
 }
@@ -203,7 +204,7 @@ void Print_grpmsg(char *buf)
     memcpy(&msg,buf,sizeof(msg));
     printf("进入\n");
     if(strcmp(msg.mg,"oover")){
-        printf("%s",msg.mg);
+        printf("                                                              %s",msg.mg);
     }
     else{//唤醒阻塞状态的好友列表
         pthread_mutex_lock(&lock_grpmsg);
@@ -217,7 +218,7 @@ void Print_qmessage(char *buf)
     message msg;
     memcpy(&msg,buf,sizeof(msg));
     if(strcmp(msg.mg,"oover")){
-        printf("%s",msg.mg);
+        printf("                                                              %s",msg.mg);
     }
     else{//唤醒阻塞状态的好友列表
         pthread_mutex_lock(&lock_msg);
@@ -323,7 +324,7 @@ void Private_chat()
         printf("[Quit退出聊天]->:");
         scanf("%s",buf);
     }while(strcmp(buf,"Quit"));
-    talkuser = 0;
+    talkuser = -1;
     //如果发送来的消息sender和talkuser一致 或为0  (未处于聊天界面) 直接打印
     //如果不相等存入未读消息
     return ;
@@ -332,7 +333,7 @@ void Private_chat()
 //删除friend.data文件中前cnt个数据
 void Delete_fdnotice(int cnt,const char *filename,const char *tmp)
 {
-    printf("cnt = %d\n",cnt);
+    //printf("cnt = %d\n",cnt);
     char buf[MAXSIZE];
     int fd ,fd_tmp;
     if((fd = open(filename,O_RDWR)) == -1){
@@ -427,7 +428,7 @@ void Show_friend()
 //删除offmsg.data文件中前cnt个数据
 void Delete_offmsg(int cnt)
 {
-    printf("cnt = %d\n",cnt);
+    //printf("cnt = %d\n",cnt);
     char buf[MAXSIZE];
     int fd ,fd_tmp;
     if((fd = open(file_offmsg,O_RDWR)) == -1){
@@ -469,9 +470,9 @@ void Read_offmsg()
         cnt++;
         memcpy(&msg,buf,sizeof(msg));
         if(msg.flag == 7 || msg.flag == 14){//聊天信息需要包装一下
-            printf("[%d]:%s\n",msg.sender,msg.mg);
+            printf("                                                              %s:[%d]\n",msg.mg,msg.sender);
         }
-        else printf("%s ",msg.mg);
+        else printf("                                                              %s ",msg.mg);
         
        printf("                                                              是否继续读取下一条好友通知[Y/N]? ");
        char next;
@@ -565,7 +566,7 @@ void Manage_friend()
         printf("[2]私聊好友\n");
         printf("[3]添加好友\n");
         printf("[4]好友通知\n");
-        printf("[5]离线消息\n");
+        printf("[5]好友消息\n");
         printf("[6]删除好友\n");
         printf("[7]屏蔽好友\n");
         printf("[8]解除屏蔽\n");
@@ -740,7 +741,7 @@ void Creat_grp()
     while( read(fd,buf,sizeof(msg))  != 0){
         cnt++;
         memcpy(&msg,buf,sizeof(msg));
-        printf("来自群[%d]消息->%s ",msg.receiver,msg.mg);
+        printf("群消息->%s ",msg.mg);
         
        printf("                                                              是否继续读取下一条好友通知[Y/N]? ");
        char next;
@@ -789,10 +790,10 @@ void Broadcast_msg()
     fgets(buf,256,stdin);
     //printf("buf = %s\n",buf);
     do{
-        Send_cmessage(21,id,buf);
+        Send_cmessage(21,id,buf);//sdender 发送者 receiver 群号 msg 消息
         printf("[Quit退出聊天]->:");
         fgets(buf,256,stdin);
-        printf("buf = %s\n",buf);
+        //printf("buf = %s\n",buf);
     }while(strcmp(buf,"Quit\n"));
     talkgrp = 0;
     //如果发送来的消息sender和talkuser一致 或为0  (未处于聊天界面) 直接打印
@@ -1138,15 +1139,28 @@ void Recv_file(char *buf)
 }
 
 void Handle_grpmsg(char *buf)
-{
+{//发送的消息 sender 群号 receiver 接受者 msg 群消息
     chat_message msg;
     memcpy(&msg,buf,sizeof(msg));
     if(msg.sender = talkgrp || msg.sender == 0){//和当前聊天群一致直接打印
-        printf("%s\n",msg.mg);
+        printf("                                                              %s\n",msg.mg);
     }
     //否则存储到离线消息中
-    else Offline_gspmsg_persist(buf);
+    else {
+        printf("                                                              收到一条群消息\n");
+        Offline_gspmsg_persist(buf);
+    }
     return ;
+}
+
+int empty_file(const char *name)
+{
+    int fd  = open(name,O_RDONLY);
+    char ch;
+    read(fd,&ch,sizeof(char));
+    if(ch == EOF)
+        return 1;
+    else return 0;
 }
 
 //处理读请求的事件
@@ -1167,10 +1181,12 @@ void do_read(int epollfd,int fd,int sockfd,char *buf)//fd表示待处理事件�
 
     int choice;
     memcpy(&choice,buf,4);
-    if(choice == 20) printf("                                                              收到一条群消息\n");
-    else if(choice == 18) printf("                                                              收到一条入群请求\n");
+    
+    if(choice == 18) printf("                                                              收到一条入群请求\n");
     else if(choice == 6) printf("                                                              收到一条好友请求\n");
-    printf("choice = %d\n",choice);
+    else if(choice == 10) printf("                                                              收到一条好友消息\n");
+    
+    //printf("choice = %d\n",choice);
     
     switch(choice)
     {
