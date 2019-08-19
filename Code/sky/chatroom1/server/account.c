@@ -129,6 +129,8 @@ int Question_veri_persist(int fd,char  *buf)
     security_question sq;
     memcpy(&sq,buf,sizeof(sq));
 
+    printf("%s\n",sq.newpasswd);
+
     char insert[MAXSIZE];
     sprintf(insert,"select  *from  security_question where username = %d",sq.username);
     if(mysql_real_query(con,insert,strlen(insert))){
@@ -142,9 +144,9 @@ int Question_veri_persist(int fd,char  *buf)
              Send_message(fd,0,"密保答案错误或账号不存在");
     }
     else {
-        if(!strcmp(row[1],sq.phonenum) || !strcmp(row[2],sq.home)){
+        if(!strcmp(row[1],sq.phonenum) && !strcmp(row[2],sq.home)){
             char update[256];
-            sprintf(update,"update Account set passwd = %s where username = %d",sq.newpasswd,sq.username);
+            sprintf(update,"update Account set passwd = '%s' where username = '%d'",sq.newpasswd,sq.username);
             if(mysql_real_query(con,update,strlen(update))){
                 finish_with_error(con);
             }else {

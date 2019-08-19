@@ -963,7 +963,9 @@ void Main_display()
                 break;
             case 3:
                 Manage_file();
+                break;
             case 0:
+                exit(0);
                 break;
         }
     }
@@ -1316,8 +1318,14 @@ void Account_login()
     
     pthread_mutex_lock(&lock_login);
     pthread_cond_wait(&cond_login,&lock_login);//阻塞等待验证完成
-    if(flag_login == 1) Main_display();
+    if(flag_login == 1) 
+    {
+        
+        Main_display();
+    }
+    flag_login = 0;
     pthread_mutex_unlock(&lock_login);
+    
 
 }
 
@@ -1333,8 +1341,8 @@ void Find_passwd()
     printf("请输入新密码:");
     scanf("%s",sq.newpasswd);
 
-    printf("find pwd phone = %s\n ",sq.phonenum);
-    printf("find pwd home = %s",sq.home);
+    // printf("find pwd phone = %s\n ",sq.phonenum);
+    // printf("find pwd home = %s",sq.home);
 
     char str2[MAXSIZE];
     sq.flag = 4;
@@ -1365,6 +1373,7 @@ void Main_menu()
                 Account_login();
                 break;
             case 0:
+                
                 break;
             case 4:
                 Find_passwd();
