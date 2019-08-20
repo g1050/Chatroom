@@ -202,6 +202,7 @@ void Print_grpmsg(char *buf)
 {
     message msg;
     memcpy(&msg,buf,sizeof(msg));
+    printf("进入\n");
     if(strcmp(msg.mg,"oover")){
         printf("                                                              %s",msg.mg);
     }
@@ -314,17 +315,15 @@ void Private_chat()
     system("clear");
     printf("请输入要私聊的好友账号:");
     scanf("%d",&receiver);
-    getchar();
     talkuser = receiver;
     char buf[256];
     printf("[Quit退出聊天]->:");
-    
-    fgets(buf,256,stdin);
+    scanf("%s",buf);
     do{
         Send_cmessage(7,receiver,buf);
         printf("[Quit退出聊天]->:");
-        fgets(buf,256,stdin);
-    }while(strcmp(buf,"Quit\n"));
+        scanf("%s",buf);
+    }while(strcmp(buf,"Quit"));
     talkuser = -1;
     //如果发送来的消息sender和talkuser一致 或为0  (未处于聊天界面) 直接打印
     //如果不相等存入未读消息
@@ -366,8 +365,7 @@ void Friend_notice()
     int fd;
     chat_message msg;
     if((fd = open(file_friend,O_RDWR)) == -1){
-        return ;
-        //my_err(file_friend,__LINE__);
+        my_err(file_friend,__LINE__);
     }
 
     char buf[MAXSIZE];
@@ -472,7 +470,7 @@ void Read_offmsg()
         cnt++;
         memcpy(&msg,buf,sizeof(msg));
         if(msg.flag == 7 || msg.flag == 14){//聊天信息需要包装一下
-            printf("                                                             [%d]: %s\n",msg.sender,msg.mg);
+            printf("                                                              %s:[%d]\n",msg.mg,msg.sender);
         }
         else printf("                                                              %s ",msg.mg);
         
@@ -734,9 +732,8 @@ void Creat_grp()
  {
      int fd;
     chat_message msg;
-    
     if((fd = open(file_offgrpmsg,O_RDWR)) == -1){
-        return ;
+        my_err(file_offgrpmsg,__LINE__);
     }
 
     char buf[MAXSIZE];
@@ -789,6 +786,7 @@ void Broadcast_msg()
     talkgrp = id;
     char buf[256];
     printf("[Quit退出聊天]->:");
+    getchar();
     fgets(buf,256,stdin);
     //printf("buf = %s\n",buf);
     do{
@@ -902,7 +900,7 @@ int  Send_file_persist(int receiver,char filename[100])
     f.sender = loginuser;
     f.flag = 24;
     strcpy(f.name,filename);
-    //printf("sizeof(file) = %d\n",sizeof(file));
+    printf("sizeof(file) = %d\n",sizeof(file));
     int fd = open(filename,O_RDONLY);
 
     //读文件发结构体 read 返回值为0表示读到文件尾
@@ -950,7 +948,7 @@ void Main_display()
         printf("[1]好友管理\n");
         printf("[2]群组管理\n");
         printf("[3]文件传输\n");
-        printf("[0]退出系统\n");
+        printf("[0]注销登录\n");
         
         //printf("length = %d\n",length);
         printf("\n请输入你的选择:");

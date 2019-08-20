@@ -1,297 +1,4 @@
-
-#include <list>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <sys/epoll.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <unistd.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <pthread.h>
-
-#define LISTENQ 12                    //连接请求队列的最大长度
-#define SERV_ADDRESS  "192.168.3.191"
-#define EPOLL_SIZE    5000
-#define SERV_PORT    4507    
-#define EPOLLEVENTS 100
-#define MAXSIZE     1024
-#define FDSIZE      1000
-#define REGISTER 1
-#define LOGIN        2
-
-
-pthread_mutex_t lock_login;
-pthread_cond_t    cond_login;
-pthread_mutex_t lock_modpwd;
-pthread_cond_t cond_modpwd;
-pthread_mutex_t lock_show;
-pthread_cond_t cond_show;
-pthread_mutex_t lock_msg;
-pthread_cond_t cond_msg;
-pthread_mutex_t lock_grp;
-pthread_cond_t cond_grp;
-pthread_mutex_t lock_grpmsg;
-pthread_cond_t cond_grpmsg;
-
-const char *file_friend = "friend.txt";
-const char *file_friend_tmp = "friendtmp.txt";
-const char *file_offmsg = "offmsg.txt";
-const char *file_offmsg_tmp = "offmsgtmp.txt";
-const char *file_message = "message.data";
-const char *file_message_tmp  = "messagetmp.data";
-const char *file_group = "group.txt";//群请求
-const char *file_group_tmp = "grouptmp.txt";
-const char *file_offgrpmsg = "groupmsg.txt";
-const char *file_offgrpmsg_tmp = "groupmsgtmp.txt";
-
-
-int flag_login  = 0;
-int flag_question = 0;
-int listenfd;
-int loginuser;
-int talkuser = -1;
-int talkgrp = 0;
-int length;
-//密保问题结构体
-typedef struct security_question
-{
-    int flag;//3密保问题
-    int username;
-    char  phonenum[18];
-    char home[256];
-    char newpasswd[30];
-}security_question;
-
-//消息结构体
-typedef struct message
-{
-    int flag;
-    char mg[256];
-}message;
-
-//账户信息结构体
-typedef struct  account
-{
-    int flag;//1注册 2登录
-    int  username;
-    char passwd[30];
-    char nickname[30];
-}account;
-
-typedef struct union_account
-{
-    int flag;//3密保问题
-    int username;
-    char passwd[30];
-    char nickname[30];
-    char  phonenum[18];
-    char home[256];
-}union_account;
-
-typedef struct chat_message
-{
-    int flag;
-    char mg[256];
-    int sender;
-    int receiver;
-}chart_message;
-
-typedef struct group
-{
-    int flag;
-    int id;//群号
-    char name[30];
-    int owner;
-    int mg1;
-    int mg2;
-    int mg3;
-}gruop;
-
-typedef struct file
-{
-    int flag;
-    int sender;
-    int receiver;
-    int size;
-    char name[100];
-    char data[800];
-}file;;
-
-void Offline_message_persist(char *buf);
- void Group_notice();
-
-//自定义错误处理函数
-void my_err(const char *s,int line)
-{
-    fprintf(stderr,"line:%d",line);
-    perror(s);
-    exit(1);
-}
-
-int Send_cmessage(int flag ,int receiver,char *buf)
-{
-    char s[MAXSIZE];
-    chat_message msg;
-    msg.flag = flag;
-    strcpy(msg.mg,buf);
-    msg.sender = loginuser;
-    msg.receiver = receiver;
-    memcpy(s,&msg,sizeof(msg));
-    int nwrite = send(listenfd,s,MAXSIZE,0);
-    if(nwrite == -1){
-        my_err("发送失败",__LINE__);
-        return 0;
-    }
-    return 1;
-}
-
-int Send_srmessage(int flag ,int receiver,int sender,char *buf)
-{
-    char s[MAXSIZE];
-    chat_message msg;
-    msg.flag = flag;
-    strcpy(msg.mg,buf);
-    msg.sender = sender;
-    msg.receiver = receiver;
-    memcpy(s,&msg,sizeof(msg));
-    int nwrite = send(listenfd,s,MAXSIZE,0);
-    if(nwrite == -1){
-        my_err("发送失败",__LINE__);
-    }
-    return 1;
-}
-
-int Send_message(int flag ,char *buf)
-{
-    char s[MAXSIZE];
-    message msg;
-    msg.flag = flag;
-    strcpy(msg.mg,buf);
-    memcpy(s,&msg,sizeof(msg));
-    int nwrite = send(listenfd,s,MAXSIZE,0);
-    if(nwrite == -1){
-        my_err("发送失败",__LINE__);
-    }
-    return 1;
-}
-
-void Print_welcome(char *buf)
-{
-    message msg;
-    memcpy(&msg,buf,sizeof(msg));
-    printf("->  %s  -<\n",msg.mg);
-}
-
-void Print_cmessage(char *buf)
-{
-    chat_message msg;
-    memcpy(&msg,buf,sizeof(msg));
-    if(talkuser == msg.sender || talkuser == 0)
-        printf("                                                              [%d]:%s\n",msg.sender,msg.mg);
-    else{
-        printf("                                                              收到一条好友消息\n");
-        Offline_message_persist(buf);
-    } 
-}
-
-void Print_grpmsg(char *buf)
-{
-    message msg;
-    memcpy(&msg,buf,sizeof(msg));
-    if(strcmp(msg.mg,"oover")){
-        printf("                                                              %s",msg.mg);
-    }
-    else{//唤醒阻塞状态的好友列表
-        pthread_mutex_lock(&lock_grpmsg);
-        pthread_cond_signal(&cond_grpmsg);
-        pthread_mutex_unlock(&lock_grpmsg);
-    }
-}
-
-void Print_qmessage(char *buf)
-{
-    message msg;
-    memcpy(&msg,buf,sizeof(msg));
-    if(strcmp(msg.mg,"oover")){
-        printf("                                                              %s",msg.mg);
-    }
-    else{//唤醒阻塞状态的好友列表
-        pthread_mutex_lock(&lock_msg);
-        pthread_cond_signal(&cond_msg);
-        pthread_mutex_unlock(&lock_msg);
-    }
-}
-
-
-void Print_friend(char *buf)
-{
-    message msg;
-    memcpy(&msg,buf,sizeof(msg));
-    if(strcmp(msg.mg,"over")){
-        printf("%s",msg.mg);
-    }
-    else{//唤醒阻塞状态的好友列表
-        pthread_mutex_lock(&lock_show);
-        pthread_cond_signal(&cond_show);
-        pthread_mutex_unlock(&lock_show);
-    }
-    // printf("按[ENTER]返回上层\n");
-    // getchar();
-}
-
-void Print_group(char *buf)
-{
-    message msg;
-    memcpy(&msg,buf,sizeof(msg));
-    if(strcmp(msg.mg,"over")){
-        printf("%s",msg.mg);
-    }
-    else{//唤醒阻塞状态的好友列表
-        pthread_mutex_lock(&lock_grp);
-        pthread_cond_signal(&cond_grp);
-        pthread_mutex_unlock(&lock_grp);
-    }
-}
-//创建套接字并进行连接,返回新创建的套接字文件描述符
-int socket_connect(char *ip,int port)
-{
-    int listenfd;
-    struct sockaddr_in servaddr;
-    listenfd = socket(AF_INET,SOCK_STREAM,0);//获取新创建的套接字的文件描述符
-    if(listenfd == -1) {
-        my_err("套接字创建失败",__LINE__);
-    }
-    bzero(&servaddr,sizeof(servaddr)); //初始化套接字地址结构体
-    servaddr.sin_family = AF_INET;
-    inet_pton(AF_INET,ip,&servaddr.sin_addr);
-    servaddr.sin_port = htons(port);
-    
-    if(connect(listenfd,(struct sockaddr*)&servaddr,sizeof(servaddr)) < 0){
-        my_err("连接失败",__LINE__);
-    }
-    else{
-            printf("\n");
-            printf("\033[1m\033[44;37m  ****************************************** \033[0m\n");
-            printf("\033[1m\033[44;37m  *           成功连接至服务器              *\033[0m\n");
-            printf("\033[1m\033[44;37m  ****************************************** \033[0m\n");
-    } 
-    return listenfd;
-}
-
-//添加事件
-void add_event(int epollfd,int fd,int state)
-{
-    struct epoll_event ev;
-    ev.events = state;
-    ev.data.fd = fd;
-    epoll_ctl(epollfd,EPOLL_CTL_ADD,fd,&ev);//事件注册函数
-    return ;
-}
-
+#include "common.h"
 
 void Add_friend()
 {
@@ -314,97 +21,19 @@ void Private_chat()
     system("clear");
     printf("请输入要私聊的好友账号:");
     scanf("%d",&receiver);
-    getchar();
     talkuser = receiver;
     char buf[256];
     printf("[Quit退出聊天]->:");
-    
-    fgets(buf,256,stdin);
+    scanf("%s",buf);
     do{
         Send_cmessage(7,receiver,buf);
         printf("[Quit退出聊天]->:");
-        fgets(buf,256,stdin);
-    }while(strcmp(buf,"Quit\n"));
+        scanf("%s",buf);
+    }while(strcmp(buf,"Quit"));
     talkuser = -1;
     //如果发送来的消息sender和talkuser一致 或为0  (未处于聊天界面) 直接打印
     //如果不相等存入未读消息
     return ;
-}
-
-//删除friend.data文件中前cnt个数据
-void Delete_fdnotice(int cnt,const char *filename,const char *tmp)
-{
-    //printf("cnt = %d\n",cnt);
-    char buf[MAXSIZE];
-    int fd ,fd_tmp;
-    if((fd = open(filename,O_RDWR)) == -1){
-        my_err(filename,__LINE__);
-     }
-       if((fd_tmp = open(tmp,O_RDWR | O_CREAT |  O_APPEND,0600 )) == -1){
-        my_err(tmp,__LINE__);
-    }
-
-     //向后移动cnt位
-    for(int i = 0;i<cnt;i++){
-        read(fd,buf,sizeof(chat_message));
-    }
-
-    while(read(fd,buf,sizeof(chat_message)) != 0){
-        if(write(fd_tmp,buf,sizeof(chat_message))  == -1){
-            my_err(tmp,__LINE__);
-        }
-    }
-
-    
-    remove(filename);
-    rename(tmp,filename);
-    close(fd);
-}
-
-void Friend_notice()
-{
-    int fd;
-    chat_message msg;
-    if((fd = open(file_friend,O_RDWR)) == -1){
-        return ;
-        //my_err(file_friend,__LINE__);
-    }
-
-    char buf[MAXSIZE];
-    int cnt = 0;
-    while( read(fd,buf,sizeof(msg))  != 0){
-        cnt++;
-        memcpy(&msg,buf,sizeof(msg));
-        printf("%s ",msg.mg);
-        char ch;
-        
-        scanf("%c",&ch);
-        getchar();
-        if(ch == 'Y' || ch == 'y'){
-            if( Send_cmessage(8,msg.sender,"Y") == 1){
-            printf("                                                              同意好友请求发送成功\n");
-   }
-        }
-       else{
-           if( Send_cmessage(8,msg.sender,"N") == 1)
-            printf("                                                              拒绝好友请求发送成功\n");
-       }
-        
-       printf("                                                              是否继续读取下一条好友通知[Y/N]? ");
-       char next;
-       
-       scanf("%c",&next);
-       getchar();
-       if(next == 'N' || 'n' == next){
-          Delete_fdnotice(cnt,file_friend,file_friend_tmp);
-           return ;
-       } 
-    
-    }
-
-    Delete_fdnotice(cnt,file_friend,file_friend_tmp);
-    printf("                                                              所有消息处理完毕\n");
-    close(fd);
 }
 
 void Show_friend()
@@ -427,72 +56,6 @@ void Show_friend()
     return ;
 }
 
-//删除offmsg.data文件中前cnt个数据
-void Delete_offmsg(int cnt)
-{
-    //printf("cnt = %d\n",cnt);
-    char buf[MAXSIZE];
-    int fd ,fd_tmp;
-    if((fd = open(file_offmsg,O_RDWR)) == -1){
-        my_err(file_offmsg,__LINE__);
-     }
-       if((fd_tmp = open(file_offmsg_tmp,O_RDWR | O_CREAT |  O_APPEND,0600 )) == -1){
-        my_err(file_offmsg_tmp,__LINE__);
-    }
-
-     //向后移动cnt位
-    for(int i = 0;i<cnt;i++){
-        read(fd,buf,sizeof(chat_message));
-    }
-
-    while(read(fd,buf,sizeof(chat_message)) != 0){
-        if(write(fd_tmp,buf,sizeof(chat_message))  == -1){
-            my_err(file_offmsg_tmp,__LINE__);
-        }
-    }
-
-    remove(file_offmsg);
-    rename(file_offmsg_tmp,file_offmsg);
-    close(fd);
-    close(fd_tmp);
-    return ;
-}
-
-void Read_offmsg()
-{
-    int fd;
-    chat_message msg;
-    if((fd = open(file_offmsg,O_RDWR)) == -1){
-        my_err(file_offmsg,__LINE__);
-    }
-
-    char buf[MAXSIZE];
-    int cnt = 0;
-    while( read(fd,buf,sizeof(msg))  != 0){
-        cnt++;
-        memcpy(&msg,buf,sizeof(msg));
-        if(msg.flag == 7 || msg.flag == 14){//聊天信息需要包装一下
-            printf("                                                             [%d]: %s\n",msg.sender,msg.mg);
-        }
-        else printf("                                                              %s ",msg.mg);
-        
-       printf("                                                              是否继续读取下一条好友通知[Y/N]? ");
-       char next;
-       getchar();
-       scanf("%c",&next);
-       if(next == 'N' || 'n' == next){
-          Delete_offmsg(cnt);
-           return ;
-       } 
-       
-    
-    }
-
-    Delete_offmsg(cnt);
-    printf("                                                              所有消息处理完毕\n");
-    close(fd);
-    
-}
 
 void Delete_friend()
 {
@@ -730,37 +293,6 @@ void Creat_grp()
     printf("                                                              所有消息处理完毕\n");
  }
 
- void Read_offgrpmsg()
- {
-     int fd;
-    chat_message msg;
-    
-    if((fd = open(file_offgrpmsg,O_RDWR)) == -1){
-        return ;
-    }
-
-    char buf[MAXSIZE];
-    int cnt = 0;
-    while( read(fd,buf,sizeof(msg))  != 0){
-        cnt++;
-        memcpy(&msg,buf,sizeof(msg));
-        printf("群消息->%s ",msg.mg);
-        
-       printf("                                                              是否继续读取下一条好友通知[Y/N]? ");
-       char next;
-       getchar();
-       scanf("%c",&next);
-       if(next == 'N' || 'n' == next){
-          Delete_fdnotice(cnt,file_offgrpmsg,file_offgrpmsg_tmp);
-           return ;
-       } 
-    
-    }
-    Delete_fdnotice(cnt,file_offgrpmsg,file_offgrpmsg_tmp);
-    printf("                                                              所有消息处理完毕\n");
-    close(fd);
- }
-
 
 void Show_group()
 {
@@ -789,6 +321,7 @@ void Broadcast_msg()
     talkgrp = id;
     char buf[256];
     printf("[Quit退出聊天]->:");
+    getchar();
     fgets(buf,256,stdin);
     //printf("buf = %s\n",buf);
     do{
@@ -893,31 +426,7 @@ void Manage_group()
     return ;
 }
 
-int  Send_file_persist(int receiver,char filename[100])
-{
-    file f;
-    char buf[MAXSIZE];
 
-    f.receiver = receiver;
-    f.sender = loginuser;
-    f.flag = 24;
-    strcpy(f.name,filename);
-    //printf("sizeof(file) = %d\n",sizeof(file));
-    int fd = open(filename,O_RDONLY);
-
-    //读文件发结构体 read 返回值为0表示读到文件尾
-    while( (f.size = read(fd,f.data,sizeof(f.data)))  != 0){
-        length += f.size;
-        memcpy(buf,&f,sizeof(f));
-        if(send(listenfd,buf,MAXSIZE,0) == -1){
-            return 0;
-        } 
-    }
-
-    close(fd);
-
-    return 1;
-}
 
 void Manage_file()
 {
@@ -950,7 +459,7 @@ void Main_display()
         printf("[1]好友管理\n");
         printf("[2]群组管理\n");
         printf("[3]文件传输\n");
-        printf("[0]退出系统\n");
+        printf("[0]注销登录\n");
         
         //printf("length = %d\n",length);
         printf("\n请输入你的选择:");
@@ -1029,6 +538,7 @@ void Question_send(char *buf)
         my_err("注册账户时发送出错",__LINE__);
     }else printf("                                                              密保问题发送成功\n");
 }
+
 void Passwd_modify(int username)
 {
     puts("修改密码");
@@ -1045,6 +555,7 @@ void Passwd_modify(int username)
     }else printf("                                                              修改密码请求发送成功\n");
 
 }
+
 void  Add_friend_request(char *buf)
 {
     int fd;
@@ -1069,78 +580,7 @@ void  Add_friend_request(char *buf)
     // getchar();
 }
 
-void Offline_message_persist(char *buf)
-{
-    int fd;
-    chat_message msg;
-    memcpy(&msg,buf,sizeof(msg));
 
-    //将好友请求存入文件中
-    if((fd = open(file_offmsg,O_RDWR | O_CREAT |  O_APPEND,0600 )) == -1){
-        my_err(file_offmsg,__LINE__);
-    }
-    if(write(fd,buf,sizeof(chat_message)) == -1){
-        my_err(file_offmsg,__LINE__);
-    }
-    close(fd);
-}
-
-void Offline_gspmsg_persist(char *buf)
-{
-    int fd;
-    chat_message msg;
-    memcpy(&msg,buf,sizeof(msg));
-
-    //将好友请求存入文件中
-    if((fd = open(file_offgrpmsg,O_RDWR | O_CREAT |  O_APPEND,0600 )) == -1){
-        my_err(file_offgrpmsg,__LINE__);
-    }
-    if(write(fd,buf,sizeof(chat_message)) == -1){
-        my_err(file_offgrpmsg,__LINE__);
-    }
-    close(fd);
-}
-
-//先存入文件中，后面手动读取
-void Add_group_request(char *buf)//chat_message类型
-{
-    int fd;
-    chat_message msg;
-    memcpy(&msg,buf,sizeof(msg));
-
-    //将好友请求存入文件中
-    if((fd = open(file_group,O_RDWR | O_CREAT |  O_APPEND,0600 )) == -1){
-        my_err(file_group,__LINE__);
-    }
-    if(write(fd,buf,sizeof(chat_message)) == -1){
-        my_err(file_group,__LINE__);
-    }
-    close(fd);
-}
-
-
-void Recv_file(char *buf)
-{
-    int fd;
-    file f;
-    memcpy(&f,buf,sizeof(f));
-
-    //如果文件不存在创建文件
-    if((fd = open(f.name,O_RDWR | O_CREAT |  O_APPEND,0600 )) == -1){
-            my_err(f.name,__LINE__);
-        }
-    
-    
-    int ret = write(fd,f.data,f.size);
-
-    //printf("ret = %d\n",ret);
-
-    // printf("name = %s\n",f.name);
-    // printf("receiver = %d\n",f.receiver);
-    // printf("sender = %d\n",f.sender);
-    // printf("size = %d\n",f.size);
-    close(fd);
-}
 
 void Handle_grpmsg(char *buf)
 {//发送的消息 sender 群号 receiver 接受者 msg 群消息
@@ -1167,101 +607,7 @@ int empty_file(const char *name)
     else return 0;
 }
 
-//处理读请求的事件
-void do_read(int epollfd,int fd,int sockfd,char *buf)//fd表示待处理事件的描述符
-{
-    //printf("处理读事件\n");
-    int ret;
-    ret = recv(fd,buf,MAXSIZE,MSG_WAITALL);
-    if(ret == -1){
-        my_err("读事件处理错误",__LINE__);
-        close(fd);
-    }
-    else if(ret == 0){
-        fprintf(stderr,"服务器关闭\n");
-        close(fd);
-        exit(1);
-    }
 
-    int choice;
-    memcpy(&choice,buf,4);
-    
-    if(choice == 18) printf("                                                              收到一条入群请求\n");
-    else if(choice == 6) printf("                                                              收到一条好友请求\n");
-    else if(choice == 10) printf("                                                              收到一条好友消息\n");
-    
-    //printf("choice = %d\n",choice);
-    
-    switch(choice)
-    {
-        case 0:
-            Print_welcome(buf);
-            break;
-        case 2:
-            Account_veri(buf);
-            break;
-        case 3:
-            Question_send(buf);
-            break;
-        case 4:
-            Question_veri(buf);
-            break;
-        case 6://添加好友请求
-            Add_friend_request(buf);
-            break;
-        case 7://打印消息
-            Print_cmessage(buf);
-            break;
-        case 9://好友状态
-            Print_friend(buf);
-            break;
-        case 10:
-            Offline_message_persist(buf);
-            break;
-        case 14://存储离线聊天消息
-            Offline_message_persist(buf);
-            break;
-        case 16://打印聊天记录
-            Print_qmessage(buf);
-            break;
-        case 18://群主或者管理员处理加群请求
-            Add_group_request(buf);
-            break;
-        case 20://处理群消息
-            Handle_grpmsg(buf);
-            break;
-        case 22://接受群信息
-            Print_group(buf);
-            break;
-        case 24://接受文件
-            Recv_file(buf);
-            break;
-        case 26://打印群聊天记录
-            Print_grpmsg(buf);
-            break;
-    }
-    
-    
-
-    memset(buf,0,MAXSIZE);
-    return ;
-}
-
-void do_write(int epollfd,int fd,int sockfd,char *buf)
-{
-    printf("处理写事件\n");
-    /* write(fd,"hello",5); */
-    int nwrite;
-    nwrite = send(fd,buf,strlen(buf),0);
-    if(nwrite == -1){
-        my_err("写事件处理错误",__LINE__);
-        close(fd);
-    }
-    else{
-        printf("发送消息成功\n");
-    }
-    memset(buf,0,MAXSIZE);
-}
 void  Account_register()
 {
     char second[30];
@@ -1355,6 +701,7 @@ void Find_passwd()
     sleep(1);
 
 }
+
 void Main_menu()
 {
     int choice = -1;
@@ -1384,62 +731,4 @@ void Main_menu()
     }
     
     return ;
-}
-
-void *do_epoll(void *arg)
-{
-    int epfd;
-    struct epoll_event events[EPOLLEVENTS];
-    char buf[MAXSIZE];
-    int ret;
-    
-    epfd = epoll_create(FDSIZE);
-    add_event(epfd,listenfd,EPOLLIN);
-
-    //获取已经准备好的描述符事件,主循环
-    while(1) {
-        int epoll_event_count = epoll_wait(epfd,events,EPOLLEVENTS,-1);//等待事件发生,ret表示需要处理的事件数目
-        //if(epoll_event_count < 0) my_err("需要处理事件异常",__LINE__);//<0的时候出错
-            for(int i = 0;i < epoll_event_count;i++ ){
-
-                int fd = events[i].data.fd;//根据事件类型做相应的处理
-
-                //只处理读写事件
-                if(events[i].events & EPOLLIN)
-                    do_read(epfd,fd,listenfd,buf);
-             }
-    }
-    close(epfd);
-    return NULL;
-}
-int main()
-{
-    setbuf(stdin,NULL);
-    pthread_t thid;
-    pthread_mutex_init(&lock_login,NULL);
-    pthread_cond_init(&cond_login,NULL);
-    pthread_mutex_init(&lock_modpwd,NULL);
-    pthread_cond_init(&cond_modpwd,NULL);
-    pthread_mutex_init(&lock_show,NULL);
-    pthread_cond_init(&cond_show,NULL);
-    pthread_mutex_init(&lock_msg,NULL);
-    pthread_cond_init(&cond_msg,NULL);
-    pthread_mutex_init(&lock_grpmsg,NULL);
-    pthread_cond_init(&cond_grpmsg,NULL);
-
-    char buf[MAXSIZE];
-     listenfd = socket_connect(SERV_ADDRESS,SERV_PORT);
-
-
-    //创建子线程专门接受消息
-    if(pthread_create(&thid,NULL,do_epoll,NULL) != 0){
-        my_err("创建线程失败",__LINE__);
-    }
-
-    //主线程进入菜单
-    Main_menu();
-
-    
-    
-return 0;
 }

@@ -207,8 +207,27 @@ int Get_grpmem_persist(char *buf)
 
  void Store_grpmsg_ppersist(int sender,int id,char *mg)
  {//将群聊天记录写入数据库中
+    int i,j;
+    int flag = 0;
     char insert[MAXSIZE];
     char s[260];
+    
+    int len = strlen(mg);
+    for(i = 0;i<len;i++){
+        if(mg[i] == '\''){
+            flag = 1;
+            printf("----- --- %c\n",mg[i]);
+            break;
+        }
+    }
+    if(flag)
+    {
+         s[len+1] = '\0';
+        for(j = len;j>i;j--){
+             mg[j] = mg[j-1];
+       }
+    }
+
     sprintf(s,"[%d]:%s",sender,mg);
     sprintf(insert,"insert into grpmsg (sender,id,msg) values('%d','%d','%s')",sender,id,s);
     if(mysql_real_query(con,insert,strlen(insert))){
@@ -303,7 +322,7 @@ int Show_grp_persist(int fd,char *buf)
     return ;
  }
 
-//从数据库中删除好友关系
+//从数据库中群成员关系
 int Delete_grp_persist(int fd,char *buf)
 {
     chat_message msg;
@@ -313,9 +332,25 @@ int Delete_grp_persist(int fd,char *buf)
     if(mysql_real_query(con,update,strlen(update))){
         finish_with_error(con);
     }else {
+        char s[256];
         printf("[%d]退出群[%d]\n",msg.sender,msg.receiver);
-        
-        Send_message(getfd(msg.sender),0,"您已经成功退群\n");
+        sprintf(s,"[%d]退出群[%d]",msg.sender,msg.receiver);
+        //通知群主
+        group grp;
+         Get_grpbaseinfo_persist(grp,msg.receiver);
+            Send_message(getfd(grp.owner),0,s);
+
+        //如果退群者是群主，群直接解散
+        if(msg.sender == grp.owner){
+            char s2[256];
+             sprintf(s2,"delete from  pertogrp where (id = %d )",msg.receiver);
+              if(mysql_real_query(con,update,strlen(update))){
+        finish_with_error(con);
+            }else {
+                 Send_message(getfd(grp.owner),0,"群已经解散");
+            }
+        }
+        //Send_message(getfd(msg.sender),0,"您已经成功退群\n");
         return 1;
     }
     return 0;
@@ -323,7 +358,7 @@ int Delete_grp_persist(int fd,char *buf)
 
 void Delete_grp(int fd,char *buf)
 {
-    printf("yyyyy\n");
+    //printf("yyyyy\n");
     chat_message msg;
     memcpy(&msg,buf,sizeof(msg));
     char s1[50];
@@ -341,9 +376,11 @@ void Delete_grp(int fd,char *buf)
     memcpy(&msg,buf,sizeof(msg));
 
     if(Query_group_persist(fd,buf)){
-        Send_message(fd,26,"oover");
+        
         printf("[%d]查询群聊天记录成功\n",msg.sender);
     }else printf("[%d]查询群聊天记录失败\n",msg.sender);
+
+    Send_message(fd,26,"oover");
     return ;
  }
 
@@ -354,6 +391,22 @@ int Query_group_persist(int fd,char *buf)
     chat_message msg;
     char str[50];
     memcpy(&msg,buf,sizeof(msg));
+
+
+    //先判断是不是群成员
+    char insert[MAXSIZE];
+    sprintf(insert,"select  *from pertogrp  where (username = %d and  id = %d)",msg.sender,msg.receiver);
+    if(mysql_real_query(con,insert,strlen(insert))){
+        finish_with_error(con);
+    }
+    MYSQL_RES *res2  = mysql_store_result(con);
+    MYSQL_ROW  row2 = mysql_fetch_row(res2);
+
+    if(row2 == NULL){
+        Send_message(fd,0,"你还不是群成员");
+        return 0;
+    }
+
 
     char insert2[MAXSIZE];
     sprintf(insert2,"select  *from grpmsg   where ( id = %d)",msg.receiver);

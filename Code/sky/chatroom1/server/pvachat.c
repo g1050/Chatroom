@@ -84,11 +84,34 @@ int Check_shield(int fd,int sender,int receiver)
 
 void Store_msg_persit(char *buf)
 {
+    int i,j;
+    int flag = 0;
     chat_message msg;
     memcpy(&msg,buf,sizeof(msg));
     //printf("-------msg.flag = %d\n",msg.flag);
     char insert[MAXSIZE];
-    sprintf(insert,"insert into message (sender,receiver,flag,msg) values('%d','%d','%d','%s')",msg.sender,msg.receiver,0,msg.mg);
+    int len = strlen(msg.mg);
+    for(i = 0;i<len;i++){
+        if(msg.mg[i] == '\''){
+            flag = 1;
+            printf("----- --- %c\n",msg.mg[i]);
+            break;
+        }
+    }
+    if(flag)
+    {
+         msg.mg[len+1] = '\0';
+        for(j = len;j>i;j--){
+             msg.mg[j] = msg.mg[j-1];
+       }
+    }
+   
+
+    // if(flag == 1)
+    //     sprintf(insert,"insert into message (sender,receiver,flag,msg) values('%d','%d','%d','%s'')",msg.sender,msg.receiver,0,msg.mg);
+    // else
+     sprintf(insert,"insert into message (sender,receiver,flag,msg) values('%d','%d','%d','%s')",msg.sender,msg.receiver,0,msg.mg);
+    
     if(mysql_real_query(con,insert,strlen(insert))){
         finish_with_error(con);
     }else 
@@ -524,8 +547,22 @@ int Query_friend_persist(int fd,char *buf)
     char str[50];
     memcpy(&msg,buf,sizeof(msg));
 
+    //首先判断是不是好友关系
+     char insert[MAXSIZE];
+    sprintf(insert,"select  *from  friendship where ((sender = %d and  receiver = %d) or (sender = %d and receiver = %d))",
+    msg.sender,msg.receiver,msg.receiver,msg.sender);
+    if(mysql_real_query(con,insert,strlen(insert))){
+        finish_with_error(con);
+    }
+    MYSQL_RES *res2  = mysql_store_result(con);
+    MYSQL_ROW  row2  = mysql_fetch_row(res2);
+    if(row2 == NULL){
+        Send_message(fd,0,"你们还不是好友关系");
+        return 0;
+    }
+
     char insert2[MAXSIZE];
-    sprintf(insert2,"select  *from  message where ((sender = %d or  receiver = %d) or (sender = %d and receiver = %d))",
+    sprintf(insert2,"select  *from  message where ((sender = %d and  receiver = %d) or (sender = %d and receiver = %d))",
     msg.sender,msg.receiver,msg.receiver,msg.sender);
     if(mysql_real_query(con,insert2,strlen(insert2))){
         finish_with_error(con);
@@ -548,9 +585,10 @@ int Query_friend_persist(int fd,char *buf)
     memcpy(&msg,buf,sizeof(msg));
 
     if(Query_friend_persist(fd,buf)){
-        Send_message(fd,16,"oover");
+        //Send_message(fd,16,"oover");
         printf("[%d]查询聊天记录成功\n",msg.sender);
     }else printf("[%d]查询聊天记录失败\n",msg.sender);
+        Send_message(fd,16,"oover");
     return ;
  }
 
