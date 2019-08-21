@@ -15,6 +15,9 @@ int main()
         my_err("监听失败\n",__LINE__);
     else printf("开始监听:%s\n",SERV_ADDRESS);
 	
+    //创建线程池
+     threadpool_init(100);
+
     do_epoll(listenfd);
      
     close(listenfd);

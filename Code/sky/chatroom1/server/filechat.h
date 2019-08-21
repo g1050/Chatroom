@@ -6,10 +6,11 @@ typedef struct file
     int flag;
     int sender;
     int receiver;
-    int size;
+    long long size;
+    long long pos;
     char name[100];
     char data[800];
 }file;
 
-void Recv_file(int fd,char *buf);
+void *Recv_file(void *buf);
 #endif

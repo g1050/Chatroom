@@ -17,6 +17,7 @@
 #include <my_global.h>
 #include <mysql.h>
 #include "./List.h"
+#include <unistd.h>
 
 #define LISTENQ 12                    //连接请求队列的最大长度
 #define SERV_ADDRESS  "0.0.0.0"
@@ -95,10 +96,30 @@ typedef struct friend_status
     int status;
 }friend_status;
 
+typedef struct task
+{
+    void *(*process) (void*arg);//函数指针，指向任务
+    void *arg;                  //回调函数的参数
+    struct task *next;          //指向下一个任务
+}task_t;
+
+typedef struct thread_pool
+{
+    pthread_mutex_t queue_lock;
+    pthread_cond_t queue_cond;
+
+    task_t* queue_head;
+
+    int shutdown;
+    pthread_t *threadid;
+
+    int max_thread_num;
+    int cur_queue_size;
+}thread_pool;
 //全局变量
 extern MYSQL *con;
 extern onlion_list_t list;
-
+extern thread_pool* pool ;
 void my_err(const char *s,int line);
 
 void add_node(int fd,int username);
@@ -135,5 +156,13 @@ void do_write(int epollfd,int fd,int sockfd,char *buf);
 void do_read(int epollfd,int fd,int sockfd,char *buf);//fd表示待处理事件的描述符;
 
 int Send_srmessage(int flag ,int receiver,int sender,char *buf);
+
+int pool_add_task(void*(*process)(void*arg),void *arg);
+
+int threadpool_destroy();
+
+void *thread_routine(void *arg);
+
+void threadpool_init(int max_thread_num);
 #endif
  //COMMON_H_
